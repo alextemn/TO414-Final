@@ -1,0 +1,57 @@
+---
+title: "Regression"
+author: "Alex"
+date: "2026-03-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+
+march_data <- read.csv("cbb.csv", check.names = FALSE)
+march_data$POSTSEASON <- ifelse(is.na(march_data$POSTSEASON), 0, 1)
+march_data <- march_data %>%
+  select(-TEAM, -CONF, -SEED)
+```
+
+# Split
+```{r}
+ratio <- 0.7
+set.seed(12345)
+
+train_rows <- sample(1:nrow(march_data), ratio * nrow(march_data))
+train <- march_data[train_rows, ]
+test <- march_data[-train_rows, ]
+```
+
+# Model
+Glm model with type as binomial since outcome is either 0 or 1. We will use our train data to train the model
+```{r}
+glm_model <- glm(
+  POSTSEASON ~ .,
+  data = train,
+  family = binomial(),
+  control = glm.control(maxit = 25)
+)
+
+summary(glm_model)
+```
+
+# Pred
+```{r}
+march_pred <- predict(glm_model, test, type = "response")
+summary(march_pred)
+
+march_binpred <- ifelse(march_pred >= 0.5, 1, 0)
+```
+
+# Eval
+```{r}
+library(caret)
+
+confusionMatrix(as.factor(march_binpred), as.factor(test$POSTSEASON), positive = "1")
+```

@@ -1,0 +1,67 @@
+---
+title: "Regression"
+author: "Alex"
+date: "2026-03-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+
+march_data <- read.csv("DEV_March Madness.csv", check.names = FALSE)
+
+march_data <- march_data %>%
+  select(-DFP, -NSTRate, -RankNSTRate, -OppNSTRate, -RankOppNSTRate,
+         -`Avg Possession Length (Offense)`, -`Avg Possession Length (Offense) Rank`,
+         -`Avg Possession Length (Defense)`, -`Avg Possession Length (Defense) Rank`) %>%
+  filter(if_all(everything(), ~ !is.na(.)))
+march_data <- march_data %>%
+  filter(Seed != "Not In a Post-Season Tournament")
+march_data$Final_Four <- ifelse(march_data$Final_Four == "Yes", 1, 0)
+
+unique(march_data$Seed[is.na(as.numeric(march_data$Seed))])
+
+march_data$Region <- as.factor(march_data$Region)
+march_data$`Vulnerable Top 2 Seed?` <- as.factor(march_data$`Vulnerable Top 2 Seed?`)
+march_data$`Top 12 in AP Top 25 During Week 6?` <- as.factor(march_data$`Top 12 in AP Top 25 During Week 6?`)
+```
+
+# Split
+```{r}
+ratio <- 0.7
+set.seed(12345)
+
+train_rows <- sample(1:nrow(march_data), ratio * nrow(march_data))
+train <- march_data[train_rows, ]
+test <- march_data[-train_rows, ]
+```
+
+# Model
+Glm model with type as binomial since outcome is either 0 or 1. We will use our train data to train the model
+```{r}
+glm_model <- glm(
+  Final_Four ~ .,
+  data = train,
+  family = binomial(),
+  control = glm.control(maxit = 25)
+)
+
+summary(glm_model)
+```
+
+# Pred
+```{r}
+march_pred <- predict(glm_model, test, type = "response")
+summary(march_pred)
+march_binpred <- ifelse(march_pred >= 0.5, 1, 0)
+```
+
+# Eval
+```{r}
+library(caret)
+confusionMatrix(as.factor(march_binpred), as.factor(test$Final_Four), positive = "1")
+```

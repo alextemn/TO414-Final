@@ -1,0 +1,20 @@
+"0","library(dplyr)"
+"2","
+Attaching package: ‘dplyr’
+
+"
+"2","The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+"
+"2","The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+"
+"0","march_data <- read.csv(""DEV_March Madness.csv"")"
+"0","march_data <- march_data %>%"
+"0","  select(-DFP, -NSTRate, -RankNSTRate, -OppNSTRate, -RankOppNSTRate)"
+"0","march_data <- march_data %>%"
+"0","  filter(if_all(everything(), ~ !is.na(.)))"

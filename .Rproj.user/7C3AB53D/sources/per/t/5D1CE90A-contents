@@ -1,0 +1,101 @@
+---
+title: "StrokeAnalysis"
+author: "Alex Temnorod"
+date: "2026-03-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Step 0: Why?
+We are given data with multiple prediction variables and in the last column, a binary 1 or 0 depending on if the patient had a stroke. It seems like what we should do is use the variables we are given to predict whether or not a patient will have a stroke, so we can give better care to those who are predicted to have stroke from our model
+
+# Step 1: Read the Data
+We see many more 0s than 1s, this means that we should focus on the sensitivity of our confusion matrix rather than accuracy (just keep it in mind)
+```{r}
+data <- read.csv("stroke.csv")
+#str(data)
+prop.table(table(data$stroke)) # check imbalance between 0 and 1 in the stroke column
+```
+
+# Step 2: Transform the Data
+## We see there are NA values, lets get rid of them
+```{r}
+data$bmi[data$bmi == "N/A"] <- NA #bmi has N/A instead of NA, convert it
+data <- data[complete.cases(data), ]
+data$bmi <- as.numeric(data$bmi) #bmi is char type, should be numeric
+#str(data)
+```
+## ID is not relevent lets get rid of it
+```{r}
+data$id <- NULL
+#str(data)
+```
+## Multiple variables must become factors since they are categorical variables 
+```{r}
+cols <- c("gender", "ever_married", "work_type", "Residence_type", "smoking_status")
+data[cols] <- lapply(data[cols], factor)
+str(data)
+```
+
+# Step 3: Split the Data
+Just going to do a 70-30 split, no need for dummy data since no clusters
+```{r}
+ratio <- 0.7
+set.seed(12345)
+
+train_rows <- sample(1:nrow(data), ratio*nrow(data))
+train <- data[train_rows, ]
+test <- data[-train_rows, ]
+```
+
+# Step 4: Build the Model
+Glm model with type as binomial since outcome is either 0 or 1. We will use our train data to train the model
+```{r}
+glm_model <- glm(stroke ~ ., data = train, family = binomial)
+```
+
+# Step 5: Predict
+Have the normal 0.5 cutoff for predictions
+```{r}
+stroke_pred <- predict(glm_model, test, type = "response")
+summary(stroke_pred)
+stroke_binpred <- ifelse(stroke_pred >= 0.5, 1, 0)
+```
+
+# Step 6 Evaluate Model
+Notice the high no information rate, which goes back to the large imbalance of 0 and 1 values. This means if we just guessed 0 always, we would get 0.9602 accuracy, so looking at overall accuracy may not be the best metric.
+
+Instead see our high senestitvity of 0.96226, showing we still correctly predict stroke patients very accurately
+```{r}
+library(caret)
+confusionMatrix(as.factor(stroke_binpred), as.factor(test$stroke), positive = "1")
+```
+
+# Step 7: Implement the Model
+This model will allow the Michigan Medical System to more accurately detect strokes and save lives because of it.
+
+### Assumptions:
+50% of stroke die
+Knowing about stroke potential and caring for it brings risk of death to 20%
+
+### No Model:
+This means we predict that no one will have a stroke
+53 people will have a stroke
+53 // 2 = 26
+
+Total Deaths: 26
+
+
+### Glm Model:
+We care for all patients predicted to have a stroke (52 patients)
+1 patient is not at risk, they live, now 20% of 51 patients at risk die, so at least 10 patients
+2 patients are at risk, but are not treated, 1 dies due to the 50% death rate of strokes
+h
+Total Deaths: 11
+
+### Result
+Our model results in 15 lives saved (26-11)
+
