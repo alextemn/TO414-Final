@@ -9,6 +9,15 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Define Business Problem
+130k of estimated value for the school to make march madness. We need to figure out how much it costs to get these predictors (we can prob just make that up/research from chat that gives us a #)
+
+Run a random forest, should output feature importance (column importance). also try a logistic regression, see which works best/has best EV.
+
+Ok, here are the predictive models we will run. first a logistic regression, then a stand alone random forest/decision tree, then finally a stacked model with random forest/decision tree at the second level
+
+We should also try a clustering thing. We can see if there are any clusters made up of mostly teams that make the tournament, especially with strong stats in the categories our models outputted. 
+
 ```{r}
 library(dplyr)
 
@@ -39,6 +48,8 @@ glm_model <- glm(
 )
 
 summary(glm_model)
+coefs <- coef(glm_model)[-1]
+sort(abs(coefs), decreasing = TRUE)
 ```
 
 # Pred

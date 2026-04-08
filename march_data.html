@@ -357,6 +357,15 @@ display: none;
 </div>
 
 
+<div id="define-business-problem" class="section level1">
+<h1>Define Business Problem</h1>
+<p>130k of estimated value for the school to make march madness. We need
+to figure out how much it costs to get these predictors (we can prob
+just make that up/research from chat that gives us a #)</p>
+<p>run a random forest, should output feature importance (column
+importance). also try a logistic regression, see which works best/has
+best EV.</p>
+<p>should we go stack model or something else? clusters??</p>
 <pre class="r"><code>library(dplyr)</code></pre>
 <pre><code>## 
 ## Attaching package: &#39;dplyr&#39;</code></pre>
@@ -370,6 +379,7 @@ display: none;
 march_data$POSTSEASON &lt;- ifelse(is.na(march_data$POSTSEASON), 0, 1)
 march_data &lt;- march_data %&gt;%
   select(-TEAM, -CONF, -SEED)</code></pre>
+</div>
 <div id="split" class="section level1">
 <h1>Split</h1>
 <pre class="r"><code>ratio &lt;- 0.7
@@ -429,6 +439,16 @@ summary(glm_model)</code></pre>
 ## AIC: 1358.6
 ## 
 ## Number of Fisher Scoring iterations: 7</code></pre>
+<pre class="r"><code>coefs &lt;- coef(glm_model)[-1]
+sort(abs(coefs), decreasing = TRUE)</code></pre>
+<pre><code>##      BARTHAG        EFG_D       `2P_D`       `3P_D`         YEAR        EFG_O 
+## 14.208153982  2.161343139  1.310894615  1.053438741  1.051647097  0.493522320 
+##          WAB        ADJOE        ADJ_T       `2P_O`       `3P_O`        ADJDE 
+##  0.464576803  0.283569555  0.245093252  0.231029492  0.225682936  0.151956194 
+##          DRB         TORD          FTR          TOR            G            W 
+##  0.099532745  0.053983947  0.048679628  0.042466833  0.040101686  0.032704354 
+##         FTRD          ORB 
+##  0.014476308  0.006943785</code></pre>
 </div>
 <div id="pred" class="section level1">
 <h1>Pred</h1>
