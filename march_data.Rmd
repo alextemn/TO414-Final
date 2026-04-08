@@ -16,7 +16,7 @@ Run a random forest, should output feature importance (column importance). also 
 
 Ok, here are the predictive models we will run. first a logistic regression, then a stand alone random forest/decision tree, then finally a stacked model with random forest/decision tree at the second level
 
-We should also try a clustering thing. We can see if there are any clusters made up of mostly teams that make the tournament, especially with strong stats in the categories our models outputted. 
+We should also try a clustering thing. We can see if there are any clusters made up of mostly teams that make the tournament, especially with strong stats in the categories our models outputted. If not its chill, but that would be sick asf.
 
 ```{r}
 library(dplyr)
@@ -37,6 +37,12 @@ train <- march_data[train_rows, ]
 test <- march_data[-train_rows, ]
 ```
 
+# Export cleaned data as well as test and train
+```{r}
+write.csv(march_data, "clean_march_data.csv")
+write.csv(train, "train.csv")
+write.csv(test, "test.csv")
+```
 # Model
 Glm model with type as binomial since outcome is either 0 or 1. We will use our train data to train the model
 ```{r}

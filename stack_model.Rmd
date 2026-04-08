@@ -1,0 +1,101 @@
+---
+title: "Stack model"
+author: "Alex"
+date: "2026-04-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+```
+
+# Get cleaned data and test + train
+```{r}
+march_data <- read.csv("clean_march_data.csv")
+```
+
+# Split into test/train and pred/outcome
+```{r}
+ratio <- 0.5
+set.seed(12345)
+
+train_rows <- sample(1:nrow(march_data), ratio*nrow(march_data))
+train <- march_data[train_rows, ]
+test <- march_data[-train_rows, ]
+
+pred_train <- train %>% select(-POSTSEASON)
+outcome_train <- train$POSTSEASON
+
+pred_test <- test %>% select(-POSTSEASON)
+outcome_test <- test$POSTSEASON
+```
+
+# Scale predictors (needed for KNN, ANN, SVM)
+```{r}
+library(caret)
+
+pred_train_scaled <- as.data.frame(scale(pred_train))
+pred_test_scaled <- as.data.frame(scale(pred_test))
+
+outcome_train_fac <- factor(outcome_train, levels = c(0, 1), labels = c("No", "Yes"))
+outcome_test_fac <- factor(outcome_test, levels = c(0, 1), labels = c("No", "Yes"))
+
+ctrl <- trainControl(method = "cv", number = 5, savePredictions = "final", classProbs = TRUE)
+```
+
+
+# Logistic Regression -> new file here
+```{r}
+logistic_model <- train(
+  x = pred_train_scaled,
+  y = outcome_train_fac,
+  method = "glm",
+  family = "binomial",
+  trControl = ctrl
+)
+```
+
+# KNN
+```{r}
+knn_model <- train(
+  x = pred_train_scaled,
+  y = outcome_train_fac,
+  method = "knn",
+  trControl = ctrl,
+  tuneLength = 5
+)
+```
+
+# ANN
+```{r}
+library(nnet)
+
+ann_model <- train(
+  x = pred_train_scaled,
+  y = outcome_train_fac,
+  method = "nnet",
+  trControl = ctrl,
+  tuneLength = 3,
+  trace = FALSE,
+  maxit = 200
+)
+```
+
+# SVM
+```{r}
+library(kernlab)
+
+svm_model <- train(
+  x = pred_train_scaled,
+  y = outcome_train_fac,
+  method = "svmRadial",
+  trControl = ctrl,
+  tuneLength = 3
+)
+```
+
+# Starting second level random forest ->start next file here
+```{r}
+
+```
