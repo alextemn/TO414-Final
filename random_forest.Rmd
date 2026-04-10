@@ -1,0 +1,96 @@
+---
+title: "random_forest"
+author: "Alex"
+date: "2026-04-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+```
+
+# Get cleaned data
+```{r}
+march_data <- read.csv("clean_march_data.csv")
+march_data <- march_data %>% select(-any_of(c("X")))
+march_data$POSTSEASON <- factor(march_data$POSTSEASON, levels = c(0, 1), labels = c("No", "Yes"))
+```
+
+# Split into test/train
+```{r}
+ratio <- 0.7
+set.seed(12345)
+
+train_rows <- sample(1:nrow(march_data), ratio * nrow(march_data))
+train <- march_data[train_rows, ]
+test <- march_data[-train_rows, ]
+```
+
+# Train random forest
+TEAM is excluded from predictors — it's just an identifier, not a feature. Random forest handles the CONF factor natively and doesn't need scaling.
+```{r}
+library(caret)
+library(randomForest)
+
+train_x <- train %>% select(-POSTSEASON, -TEAM)
+train_y <- train$POSTSEASON
+
+ctrl <- trainControl(method = "cv", number = 5, classProbs = TRUE)
+
+rf_model <- train(
+  x = train_x,
+  y = train_y,
+  method = "rf",
+  trControl = ctrl,
+  tuneLength = 3
+)
+
+rf_model
+varImp(rf_model)
+```
+
+# Predict tournament likelihood for each test team
+```{r}
+test_x <- test %>% select(-POSTSEASON, -TEAM)
+
+# type = "prob" returns a probability for each class instead of a hard label
+rf_probs <- predict(rf_model, test_x, type = "prob")
+prob_yes <- rf_probs[, "Yes"]
+
+# Bucket into tiers: Unlikely (0-30%), Bubble (30-60%), Likely (60-100%)
+tier <- cut(
+  prob_yes,
+  breaks = c(-Inf, 0.30, 0.60, Inf),
+  labels = c("Unlikely (0-30%)", "Bubble (30-60%)", "Likely (60-100%)"),
+  right = FALSE
+)
+
+results <- data.frame(
+  TEAM = test$TEAM,
+  prob_tournament = round(prob_yes, 3),
+  tier = tier,
+  actual = test$POSTSEASON
+)
+
+# Sort highest probability first
+results <- results[order(-results$prob_tournament), ]
+
+# Random forest gives much smoother probabilities than a single C5.0 tree
+# since each prediction is averaged across hundreds of trees.
+
+table(results$tier)
+
+results[results$tier == "Bubble (30-60%)", ]
+```
+
+# Tier accuracy — how well do the tiers match actual outcomes?
+```{r}
+# Cross-tab of predicted tier vs actual outcome
+tier_matrix <- table(Tier = results$tier, Actual = results$actual)
+tier_matrix
+
+# Proportion of teams in each tier that actually made the tournament
+tier_accuracy <- prop.table(tier_matrix, margin = 1)
+round(tier_accuracy, 3)
+```

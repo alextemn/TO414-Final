@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # Define Business Problem
-130k of estimated value for the school to make march madness. We need to figure out how much it costs to get these predictors (we can prob just make that up/research from chat that gives us a #)
+300k of estimated value for the school to make march madness. We need to figure out how much it costs to get these predictors (we can prob just make that up/research from chat that gives us a #)
 
 Run a random forest, should output feature importance (column importance). also try a logistic regression, see which works best/has best EV.
 
@@ -18,16 +18,26 @@ Ok, here are the predictive models we will run. first a logistic regression, the
 
 We should also try a clustering thing. We can see if there are any clusters made up of mostly teams that make the tournament, especially with strong stats in the categories our models outputted. If not its chill, but that would be sick asf.
 
+## Actual Problem
+Schools don't know how likely they are to make the tournament before the season with high accuracy. Predict this and we get a better understanding of where athletic departments should allocate funds.
+
+high likelihood-> getting high quality non conference games, advanced scouting, etc... (not super important)
+borderline-> use feature importance to try to get to high likelihood through portal work
+low-> not enough to make tournament this season, focus on investing in the future
+
+So lets output likelihoods for any given team
 ```{r}
 library(dplyr)
 
 march_data <- read.csv("cbb.csv", check.names = FALSE)
 march_data$POSTSEASON <- ifelse(is.na(march_data$POSTSEASON), 0, 1)
 march_data <- march_data %>%
-  select(-TEAM, -CONF, -SEED)
+  select(-SEED, -YEAR, -G, -W)
+bluebloods <- c("North Carolina", "Kentucky", "Duke", "Kansas", "UCLA", "Connecticut") #do this instead of team so that we can have a normal test and train
+march_data$BLUEBLOOD <- ifelse(march_data$TEAM %in% bluebloods, 1, 0)
 ```
 
-# Split
+# Split -> this is just a single logistic regression, use it as a base point for predictions
 ```{r}
 ratio <- 0.7
 set.seed(12345)
@@ -43,12 +53,16 @@ write.csv(march_data, "clean_march_data.csv")
 write.csv(train, "train.csv")
 write.csv(test, "test.csv")
 ```
+
 # Model
-Glm model with type as binomial since outcome is either 0 or 1. We will use our train data to train the model
+Glm model with type as binomial since outcome is either 0 or 1. We use our train data to train the model. TEAM is dropped from the training frame entirely — it's just an identifier, and leaving it in would make glm treat it as a factor with hundreds of levels (which breaks prediction on any test team not seen in training).
 ```{r}
+train_model <- train %>% select(-TEAM)
+test_model <- test %>% select(-TEAM)
+
 glm_model <- glm(
   POSTSEASON ~ .,
-  data = train,
+  data = train_model,
   family = binomial(),
   control = glm.control(maxit = 25)
 )
@@ -58,17 +72,44 @@ coefs <- coef(glm_model)[-1]
 sort(abs(coefs), decreasing = TRUE)
 ```
 
-# Pred
+# Predict tournament likelihood for each test team
 ```{r}
-march_pred <- predict(glm_model, test, type = "response")
-summary(march_pred)
+march_pred <- predict(glm_model, test_model, type = "response")
 
-march_binpred <- ifelse(march_pred >= 0.5, 1, 0)
+# Bucket into tiers: Unlikely (0-30%), Bubble (30-60%), Likely (60-100%)
+tier <- cut(
+  march_pred,
+  breaks = c(-Inf, 0.30, 0.60, Inf),
+  labels = c("Unlikely (0-30%)", "Bubble (30-60%)", "Likely (60-100%)"),
+  right = FALSE
+)
+
+results <- data.frame(
+  TEAM = test$TEAM,
+  prob_tournament = round(march_pred, 3),
+  tier = tier,
+  actual = test$POSTSEASON
+)
+
+# Sort in descending order
+results <- results[order(-results$prob_tournament), ]
+
+# How teams distribute across tiers
+table(results$tier)
+
+# Bubble teams — most interesting for athletic department decisions
+results[results$tier == "Bubble (30-60%)", ]
 ```
 
-# Eval
+# Tier accuracy — how well do the tiers match actual outcomes?
 ```{r}
 library(caret)
 
-confusionMatrix(as.factor(march_binpred), as.factor(test$POSTSEASON), positive = "1")
+# Cross-tab of predicted tier vs actual outcome
+tier_matrix <- table(Tier = results$tier, Actual = results$actual)
+tier_matrix
+
+# Proportion of teams in each tier that actually made the tournament
+tier_accuracy <- prop.table(tier_matrix, margin = 1)
+round(tier_accuracy, 3)
 ```

@@ -11,9 +11,9 @@
 
 <meta name="author" content="Alex" />
 
-<meta name="date" content="2026-04-08" />
+<meta name="date" content="2026-04-10" />
 
-<title>Stack model</title>
+<title>random_forest</title>
 
 <script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
 // be compatible with the behavior of Pandoc < 2.8).
@@ -350,9 +350,9 @@ display: none;
 
 
 
-<h1 class="title toc-ignore">Stack model</h1>
+<h1 class="title toc-ignore">random_forest</h1>
 <h4 class="author">Alex</h4>
-<h4 class="date">2026-04-08</h4>
+<h4 class="date">2026-04-10</h4>
 
 </div>
 
@@ -360,172 +360,26 @@ display: none;
 <div id="get-cleaned-data" class="section level1">
 <h1>Get cleaned data</h1>
 <pre class="r"><code>march_data &lt;- read.csv(&quot;clean_march_data.csv&quot;)
-# Drop row index column if present
 march_data &lt;- march_data %&gt;% select(-any_of(c(&quot;X&quot;)))
-
-# Pull TEAM and YEAR from the raw cbb.csv (YEAR was dropped during cleaning).
-# This relies on clean_march_data.csv having the same row order as cbb.csv,
-# which it does since the cleaning step doesn&#39;t filter rows.
-cbb_raw &lt;- read.csv(&quot;cbb.csv&quot;)
-teams_all &lt;- cbb_raw$TEAM
-years_all &lt;- cbb_raw$YEAR
-
-# Drop TEAM from the model frame so it doesn&#39;t get turned into dummies or fed to models
-march_data &lt;- march_data %&gt;% select(-TEAM)
-
-# Convert CONF to dummy variables
-march_data &lt;- as.data.frame(model.matrix(~ . - 1, data = march_data))</code></pre>
+march_data$POSTSEASON &lt;- factor(march_data$POSTSEASON, levels = c(0, 1), labels = c(&quot;No&quot;, &quot;Yes&quot;))</code></pre>
 </div>
-<div id="split-into-testtrain-and-predoutcome" class="section level1">
-<h1>Split into test/train and pred/outcome</h1>
-<pre class="r"><code>ratio &lt;- 0.5
+<div id="split-into-testtrain" class="section level1">
+<h1>Split into test/train</h1>
+<pre class="r"><code>ratio &lt;- 0.7
 set.seed(12345)
 
 train_rows &lt;- sample(1:nrow(march_data), ratio * nrow(march_data))
 train &lt;- march_data[train_rows, ]
-test &lt;- march_data[-train_rows, ]
-
-# Keep test teams and years aligned with the split
-test_teams &lt;- teams_all[-train_rows]
-test_years &lt;- years_all[-train_rows]
-
-pred_train &lt;- train %&gt;% select(-POSTSEASON)
-outcome_train &lt;- train$POSTSEASON
-
-pred_test &lt;- test %&gt;% select(-POSTSEASON)
-outcome_test &lt;- test$POSTSEASON</code></pre>
+test &lt;- march_data[-train_rows, ]</code></pre>
 </div>
-<div id="scale-predictors-needed-for-knn-ann-svm" class="section level1">
-<h1>Scale predictors (needed for KNN, ANN, SVM)</h1>
+<div id="train-random-forest" class="section level1">
+<h1>Train random forest</h1>
+<p>TEAM is excluded from predictors — it’s just an identifier, not a
+feature. Random forest handles the CONF factor natively and doesn’t need
+scaling.</p>
 <pre class="r"><code>library(caret)</code></pre>
 <pre><code>## Loading required package: ggplot2</code></pre>
 <pre><code>## Loading required package: lattice</code></pre>
-<pre class="r"><code># Remove near-zero-variance columns before scaling (prevents NaN from rare dummies)
-nzv &lt;- nearZeroVar(pred_train, saveMetrics = FALSE)
-if (length(nzv) &gt; 0) {
-  pred_train &lt;- pred_train[, -nzv]
-  pred_test &lt;- pred_test[, -nzv]
-}
-
-# Scale training data and save the parameters
-train_scale &lt;- scale(pred_train)
-train_center &lt;- attr(train_scale, &quot;scaled:center&quot;)
-train_sd &lt;- attr(train_scale, &quot;scaled:scale&quot;)
-
-pred_train_scaled &lt;- as.data.frame(train_scale)
-# Scale test data using training mean/sd
-pred_test_scaled &lt;- as.data.frame(scale(pred_test, center = train_center, scale = train_sd))
-
-outcome_train_fac &lt;- factor(outcome_train, levels = c(0, 1), labels = c(&quot;No&quot;, &quot;Yes&quot;))
-outcome_test_fac &lt;- factor(outcome_test, levels = c(0, 1), labels = c(&quot;No&quot;, &quot;Yes&quot;))
-
-ctrl &lt;- trainControl(method = &quot;cv&quot;, number = 5, savePredictions = &quot;final&quot;, classProbs = TRUE)</code></pre>
-</div>
-<div id="knn" class="section level1">
-<h1>KNN</h1>
-<pre class="r"><code>knn_model &lt;- train(
-  x = pred_train_scaled,
-  y = outcome_train_fac,
-  method = &quot;knn&quot;,
-  trControl = ctrl,
-  tuneLength = 5
-)
-varImp(knn_model)</code></pre>
-<pre><code>## ROC curve variable importance
-## 
-##         Importance
-## FTRD       100.000
-## WAB         83.268
-## X2P_O       78.133
-## TOR         77.661
-## ADJOE       75.952
-## X3P_D       75.298
-## BARTHAG     73.348
-## FTR         72.736
-## DRB         64.926
-## EFG_O       59.648
-## ADJDE       48.126
-## EFG_D       35.922
-## TORD        21.795
-## ADJ_T        9.684
-## X3P_O        3.873
-## ORB          1.498
-## X2P_D        0.000</code></pre>
-</div>
-<div id="ann" class="section level1">
-<h1>ANN</h1>
-<pre class="r"><code>library(nnet)
-
-ann_model &lt;- train(
-  x = pred_train_scaled,
-  y = outcome_train_fac,
-  method = &quot;nnet&quot;,
-  trControl = ctrl,
-  tuneLength = 3,
-  trace = FALSE,
-  maxit = 200
-)
-varImp(ann_model)</code></pre>
-<pre><code>## nnet variable importance
-## 
-##         Overall
-## BARTHAG 100.000
-## ADJDE    98.819
-## EFG_D    81.944
-## EFG_O    81.012
-## WAB      70.514
-## ADJOE    65.008
-## X3P_D    62.661
-## ADJ_T    59.927
-## X2P_O    54.026
-## X2P_D    52.399
-## X3P_O    49.901
-## DRB      25.601
-## FTR      14.049
-## FTRD     13.592
-## TORD      6.915
-## ORB       6.492
-## TOR       0.000</code></pre>
-</div>
-<div id="svm" class="section level1">
-<h1>SVM</h1>
-<pre class="r"><code>library(kernlab)</code></pre>
-<pre><code>## 
-## Attaching package: &#39;kernlab&#39;</code></pre>
-<pre><code>## The following object is masked from &#39;package:ggplot2&#39;:
-## 
-##     alpha</code></pre>
-<pre class="r"><code>svm_model &lt;- train(
-  x = pred_train_scaled,
-  y = outcome_train_fac,
-  method = &quot;svmRadial&quot;,
-  trControl = ctrl,
-  tuneLength = 3
-)
-varImp(svm_model)</code></pre>
-<pre><code>## ROC curve variable importance
-## 
-##         Importance
-## FTRD       100.000
-## WAB         83.268
-## X2P_O       78.133
-## TOR         77.661
-## ADJOE       75.952
-## X3P_D       75.298
-## BARTHAG     73.348
-## FTR         72.736
-## DRB         64.926
-## EFG_O       59.648
-## ADJDE       48.126
-## EFG_D       35.922
-## TORD        21.795
-## ADJ_T        9.684
-## X3P_O        3.873
-## ORB          1.498
-## X2P_D        0.000</code></pre>
-</div>
-<div id="random-forest" class="section level1">
-<h1>Random Forest</h1>
 <pre class="r"><code>library(randomForest)</code></pre>
 <pre><code>## randomForest 4.7-1.2</code></pre>
 <pre><code>## Type rfNews() to see new features/changes/bug fixes.</code></pre>
@@ -537,256 +391,523 @@ varImp(svm_model)</code></pre>
 <pre><code>## The following object is masked from &#39;package:dplyr&#39;:
 ## 
 ##     combine</code></pre>
-<pre class="r"><code>rf_model &lt;- train(
-  x = pred_train_scaled,
-  y = outcome_train_fac,
+<pre class="r"><code>train_x &lt;- train %&gt;% select(-POSTSEASON, -TEAM)
+train_y &lt;- train$POSTSEASON
+
+ctrl &lt;- trainControl(method = &quot;cv&quot;, number = 5, classProbs = TRUE)
+
+rf_model &lt;- train(
+  x = train_x,
+  y = train_y,
   method = &quot;rf&quot;,
   trControl = ctrl,
   tuneLength = 3
 )
-varImp(rf_model)</code></pre>
+
+rf_model</code></pre>
+<pre><code>## Random Forest 
+## 
+## 2974 samples
+##   19 predictor
+##    2 classes: &#39;No&#39;, &#39;Yes&#39; 
+## 
+## No pre-processing
+## Resampling: Cross-Validated (5 fold) 
+## Summary of sample sizes: 2380, 2379, 2379, 2379, 2379 
+## Resampling results across tuning parameters:
+## 
+##   mtry  Accuracy   Kappa    
+##    2    0.7700076  0.5389228
+##   10    0.7706776  0.5407768
+##   19    0.7646261  0.5291510
+## 
+## Accuracy was used to select the optimal model using the largest value.
+## The final value used for the model was mtry = 10.</code></pre>
+<pre class="r"><code>varImp(rf_model)</code></pre>
 <pre><code>## rf variable importance
 ## 
-##          Overall
-## WAB     100.0000
-## FTRD     80.0508
-## FTR      64.0446
-## X3P_D    34.5823
-## ADJ_T    32.0792
-## DRB      24.7724
-## TOR      22.5106
-## X3P_O    17.1294
-## X2P_O    15.1613
-## TORD      9.5839
-## X2P_D     9.1918
-## ADJDE     8.4426
-## ORB       7.8758
-## EFG_O     2.4082
-## BARTHAG   0.3546
-## ADJOE     0.1617
-## EFG_D     0.0000</code></pre>
+##           Overall
+## WAB        100.00
+## FTRD        95.82
+## FTR         79.93
+## X3P_D       53.37
+## ADJ_T       46.59
+## BARTHAG     46.23
+## DRB         45.61
+## TOR         43.68
+## X2P_O       42.83
+## X3P_O       42.37
+## X2P_D       36.83
+## TORD        30.81
+## ADJOE       30.49
+## ORB         30.14
+## ADJDE       29.04
+## EFG_O       26.63
+## CONF        26.15
+## EFG_D       23.99
+## BLUEBLOOD    0.00</code></pre>
 </div>
-<div id="build-meta-features" class="section level1">
-<h1>Build meta-features</h1>
-<pre class="r"><code># Get first-level predictions on training data
-knn_train_preds &lt;- predict(knn_model, pred_train_scaled, type = &quot;prob&quot;)$Yes
-ann_train_preds &lt;- predict(ann_model, pred_train_scaled, type = &quot;prob&quot;)$Yes
-svm_train_preds &lt;- predict(svm_model, pred_train_scaled, type = &quot;prob&quot;)$Yes
-rf_train_preds &lt;- predict(rf_model, pred_train_scaled, type = &quot;prob&quot;)$Yes
+<div id="predict-tournament-likelihood-for-each-test-team" class="section level1">
+<h1>Predict tournament likelihood for each test team</h1>
+<pre class="r"><code>test_x &lt;- test %&gt;% select(-POSTSEASON, -TEAM)
 
-meta_train &lt;- data.frame(
-  knn = knn_train_preds,
-  ann = ann_train_preds,
-  svm = svm_train_preds,
-  rf = rf_train_preds,
-  outcome = outcome_train_fac
-)
+# type = &quot;prob&quot; returns a probability for each class instead of a hard label
+rf_probs &lt;- predict(rf_model, test_x, type = &quot;prob&quot;)
+prob_yes &lt;- rf_probs[, &quot;Yes&quot;]
 
-# Get first-level predictions on test data
-knn_test_preds &lt;- predict(knn_model, pred_test_scaled, type = &quot;prob&quot;)$Yes
-ann_test_preds &lt;- predict(ann_model, pred_test_scaled, type = &quot;prob&quot;)$Yes
-svm_test_preds &lt;- predict(svm_model, pred_test_scaled, type = &quot;prob&quot;)$Yes
-rf_test_preds &lt;- predict(rf_model, pred_test_scaled, type = &quot;prob&quot;)$Yes
-
-meta_test &lt;- data.frame(
-  knn = knn_test_preds,
-  ann = ann_test_preds,
-  svm = svm_test_preds,
-  rf = rf_test_preds
-)</code></pre>
-</div>
-<div id="second-level-stacked-logistic-regression" class="section level1">
-<h1>Second-level stacked logistic regression</h1>
-<p>Using logistic regression as the meta-learner instead of C5.0 — C5.0
-only outputs a small number of distinct leaf-node probabilities, which
-causes every team to clump at the same few values and leaves the Bubble
-tier empty. Logistic regression outputs smooth probabilities across the
-full 0-1 range, which is what we want for likelihood tiers.</p>
-<pre class="r"><code>stack_model &lt;- train(
-  x = meta_train %&gt;% select(-outcome),
-  y = meta_train$outcome,
-  method = &quot;glm&quot;,
-  family = &quot;binomial&quot;,
-  trControl = trainControl(method = &quot;cv&quot;, number = 5, classProbs = TRUE)
-)</code></pre>
-<pre><code>## Warning: glm.fit: algorithm did not converge</code></pre>
-<pre><code>## Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred</code></pre>
-<pre><code>## Warning: glm.fit: algorithm did not converge</code></pre>
-<pre><code>## Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred</code></pre>
-<pre><code>## Warning: glm.fit: algorithm did not converge</code></pre>
-<pre><code>## Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred</code></pre>
-<pre><code>## Warning: glm.fit: algorithm did not converge</code></pre>
-<pre><code>## Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred</code></pre>
-<pre><code>## Warning: glm.fit: algorithm did not converge</code></pre>
-<pre><code>## Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred</code></pre>
-<pre><code>## Warning: glm.fit: algorithm did not converge</code></pre>
-<pre><code>## Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred</code></pre>
-<pre class="r"><code>stack_probs &lt;- predict(stack_model, meta_test, type = &quot;prob&quot;)$Yes</code></pre>
-</div>
-<div id="tournament-likelihood-per-team" class="section level1">
-<h1>Tournament likelihood per team</h1>
-<pre class="r"><code># Bucket into tiers: Unlikely (0-30%), Bubble (30-70%), Likely (70-100%)
+# Bucket into tiers: Unlikely (0-30%), Bubble (30-60%), Likely (60-100%)
 tier &lt;- cut(
-  stack_probs,
-  breaks = c(-Inf, 0.30, 0.70, Inf),
-  labels = c(&quot;Unlikely (0-30%)&quot;, &quot;Bubble (30-70%)&quot;, &quot;Likely (70-100%)&quot;),
+  prob_yes,
+  breaks = c(-Inf, 0.30, 0.60, Inf),
+  labels = c(&quot;Unlikely (0-30%)&quot;, &quot;Bubble (30-60%)&quot;, &quot;Likely (60-100%)&quot;),
   right = FALSE
 )
 
 results &lt;- data.frame(
-  TEAM = test_teams,
-  YEAR = test_years,
-  knn      = round(meta_test$knn, 3),
-  ann      = round(meta_test$ann, 3),
-  svm      = round(meta_test$svm, 3),
-  rf       = round(meta_test$rf, 3),
-  stacked  = round(stack_probs, 3),
-  tier     = tier,
-  actual   = outcome_test_fac
+  TEAM = test$TEAM,
+  prob_tournament = round(prob_yes, 3),
+  tier = tier,
+  actual = test$POSTSEASON
 )
 
-# Sort by stacked probability, highest first
-results &lt;- results[order(-results$stacked), ]
+# Sort highest probability first
+results &lt;- results[order(-results$prob_tournament), ]
+
+# Random forest gives much smoother probabilities than a single C5.0 tree
+# since each prediction is averaged across hundreds of trees.
 
 # How teams distribute across tiers
 table(results$tier)</code></pre>
 <pre><code>## 
-## Unlikely (0-30%)  Bubble (30-70%) Likely (70-100%) 
-##             1016               65             1044</code></pre>
-<pre class="r"><code># Bubble teams — the ones worth focusing portal/investment decisions on
-results[results$tier == &quot;Bubble (30-70%)&quot;, ]</code></pre>
-<pre><code>##                        TEAM YEAR   knn   ann   svm    rf stacked
-## 2098      Boston University 2025 0.769 0.922 0.916 0.638   0.697
-## 1930     North Carolina A&amp;T 2024 0.846 0.869 0.863 0.622   0.683
-## 396  Maryland Eastern Shore 2019 0.615 0.897 0.782 0.596   0.675
-## 943                   IUPUI 2013 0.385 0.463 0.422 0.488   0.673
-## 1530              Air Force 2022 0.615 0.929 0.803 0.602   0.665
-## 2080                Pacific 2025 0.538 0.889 0.909 0.634   0.664
-## 1365          James Madison 2021 0.462 0.531 0.681 0.566   0.658
-## 118            Jacksonville 2019 0.538 0.213 0.287 0.448   0.657
-## 508                 Colgate 2016 0.462 0.331 0.126 0.398   0.643
-## 177                   Idaho 2018 0.385 0.504 0.492 0.508   0.641
-## 1935         St. Francis PA 2024 0.769 0.789 0.617 0.546   0.641
-## 92                   Tulane 2016 0.462 0.205 0.250 0.436   0.638
-## 1902           Old Dominion 2024 0.462 0.391 0.490 0.508   0.634
-## 1186             Vanderbilt 2016 0.846 0.637 0.741 0.584   0.632
-## 551             The Citadel 2015 0.308 0.197 0.239 0.432   0.628
-## 1651      Northern Colorado 2023 0.692 0.796 0.805 0.602   0.620
-## 1936                  IUPUI 2024 0.692 0.799 0.891 0.628   0.617
-## 795                    Navy 2014 0.231 0.163 0.196 0.418   0.602
-## 636        Western Illinois 2018 0.462 0.398 0.402 0.480   0.601
-## 537            UT Arlington 2017 0.462 0.732 0.802 0.600   0.598
-## 1109                   Iona 2018 0.615 0.319 0.399 0.480   0.596
-## 190                 Liberty 2017 0.308 0.813 0.430 0.486   0.595
-## 726                  Bryant 2014 0.538 0.300 0.210 0.422   0.586
-## 919              Providence 2013 0.385 0.465 0.379 0.472   0.586
-## 1558   UT Rio Grande Valley 2022 0.462 0.665 0.651 0.554   0.584
-## 517                  Lehigh 2018 0.231 0.438 0.354 0.464   0.579
-## 1428                 Dayton 2022 0.923 0.896 0.888 0.626   0.579
-## 516               Lafayette 2018 0.462 0.744 0.654 0.554   0.569
-## 1972                   Iowa 2025 0.692 0.909 0.865 0.618   0.569
-## 1623                 Albany 2023 0.462 0.933 0.901 0.628   0.568
-## 1627                Wyoming 2023 0.615 0.765 0.640 0.550   0.565
-## 1385       South Dakota St. 2021 0.769 0.373 0.356 0.466   0.562
-## 926                Kentucky 2013 0.538 0.619 0.693 0.566   0.548
-## 244            Northeastern 2018 0.692 0.480 0.692 0.566   0.525
-## 745                  Drexel 2014 0.538 0.124 0.576 0.532   0.522
-## 2064                 Toledo 2025 0.692 0.940 0.859 0.614   0.500
-## 1355                Indiana 2021 0.538 0.602 0.625 0.544   0.499
-## 1277         Saint Joseph&#39;s 2021 0.769 0.756 0.764 0.586   0.495
-## 929        North Dakota St. 2013 0.769 0.233 0.572 0.530   0.488
-## 186                 Radford 2015 0.462 0.173 0.278 0.440   0.487
-## 672          New Mexico St. 2016 0.462 0.302 0.604 0.538   0.476
-## 512              Holy Cross 2017 0.462 0.632 0.570 0.526   0.474
-## 390  Maryland Eastern Shore 2018 0.615 0.886 0.849 0.610   0.469
-## 1338                Hampton 2021 0.385 0.740 0.707 0.566   0.449
-## 106       Northern Kentucky 2015 0.308 0.315 0.451 0.490   0.446
-## 46             Rhode Island 2019 0.615 0.878 0.846 0.608   0.439
-## 1694          East Carolina 2023 0.846 0.680 0.525 0.512   0.434
-## 2114       Western Carolina 2025 0.692 0.954 0.913 0.628   0.427
-## 2052         William &amp; Mary 2025 0.385 0.404 0.408 0.476   0.426
-## 1572    Arkansas Pine Bluff 2022 0.538 0.956 0.896 0.622   0.422
-## 1570                  Lamar 2022 0.615 0.743 0.629 0.542   0.416
-## 1464  College of Charleston 2022 0.615 0.182 0.305 0.446   0.410
-## 2125            Chicago St. 2025 0.385 0.936 0.793 0.590   0.405
-## 1968            McNeese St. 2025 0.769 0.910 0.901 0.624   0.401
-## 192            Presbyterian 2017 0.846 0.500 0.685 0.560   0.389
-## 1655           Jacksonville 2023 0.923 0.947 0.980 0.648   0.389
-## 451           Robert Morris 2017 0.462 0.135 0.229 0.422   0.388
-## 922               Fairfield 2013 0.077 0.017 0.047 0.366   0.387
-## 360                  Toledo 2018 0.538 0.292 0.626 0.542   0.383
-## 1864          Cleveland St. 2024 0.769 0.775 0.875 0.616   0.381
-## 1389              Weber St. 2021 0.615 0.814 0.419 0.476   0.357
-## 408            Missouri St. 2017 0.385 0.524 0.463 0.490   0.355
-## 1548              Merrimack 2022 0.462 0.252 0.361 0.460   0.337
-## 1676            Jackson St. 2023 0.385 0.819 0.757 0.576   0.304
-## 1746     Eastern Washington 2023 0.615 0.883 0.815 0.594   0.301
-##                 tier actual
-## 2098 Bubble (30-70%)    Yes
-## 1930 Bubble (30-70%)    Yes
-## 396  Bubble (30-70%)     No
-## 943  Bubble (30-70%)     No
-## 1530 Bubble (30-70%)    Yes
-## 2080 Bubble (30-70%)    Yes
-## 1365 Bubble (30-70%)    Yes
-## 118  Bubble (30-70%)     No
-## 508  Bubble (30-70%)     No
-## 177  Bubble (30-70%)     No
-## 1935 Bubble (30-70%)    Yes
-## 92   Bubble (30-70%)     No
-## 1902 Bubble (30-70%)    Yes
-## 1186 Bubble (30-70%)    Yes
-## 551  Bubble (30-70%)     No
-## 1651 Bubble (30-70%)    Yes
-## 1936 Bubble (30-70%)    Yes
-## 795  Bubble (30-70%)     No
-## 636  Bubble (30-70%)     No
-## 537  Bubble (30-70%)     No
-## 1109 Bubble (30-70%)    Yes
-## 190  Bubble (30-70%)     No
-## 726  Bubble (30-70%)     No
-## 919  Bubble (30-70%)     No
-## 1558 Bubble (30-70%)    Yes
-## 517  Bubble (30-70%)     No
-## 1428 Bubble (30-70%)    Yes
-## 516  Bubble (30-70%)     No
-## 1972 Bubble (30-70%)    Yes
-## 1623 Bubble (30-70%)    Yes
-## 1627 Bubble (30-70%)    Yes
-## 1385 Bubble (30-70%)    Yes
-## 926  Bubble (30-70%)     No
-## 244  Bubble (30-70%)     No
-## 745  Bubble (30-70%)     No
-## 2064 Bubble (30-70%)    Yes
-## 1355 Bubble (30-70%)    Yes
-## 1277 Bubble (30-70%)    Yes
-## 929  Bubble (30-70%)     No
-## 186  Bubble (30-70%)     No
-## 672  Bubble (30-70%)     No
-## 512  Bubble (30-70%)     No
-## 390  Bubble (30-70%)     No
-## 1338 Bubble (30-70%)    Yes
-## 106  Bubble (30-70%)     No
-## 46   Bubble (30-70%)     No
-## 1694 Bubble (30-70%)    Yes
-## 2114 Bubble (30-70%)    Yes
-## 2052 Bubble (30-70%)    Yes
-## 1572 Bubble (30-70%)    Yes
-## 1570 Bubble (30-70%)    Yes
-## 1464 Bubble (30-70%)    Yes
-## 2125 Bubble (30-70%)    Yes
-## 1968 Bubble (30-70%)    Yes
-## 192  Bubble (30-70%)     No
-## 1655 Bubble (30-70%)    Yes
-## 451  Bubble (30-70%)     No
-## 922  Bubble (30-70%)     No
-## 360  Bubble (30-70%)     No
-## 1864 Bubble (30-70%)    Yes
-## 1389 Bubble (30-70%)    Yes
-## 408  Bubble (30-70%)     No
-## 1548 Bubble (30-70%)    Yes
-## 1676 Bubble (30-70%)    Yes
-## 1746 Bubble (30-70%)    Yes</code></pre>
+## Unlikely (0-30%)  Bubble (30-60%) Likely (60-100%) 
+##              327              396              552</code></pre>
+<pre class="r"><code># Top 25 most likely tournament teams
+head(results, 25)</code></pre>
+<pre><code>##            TEAM prob_tournament             tier actual
+## 3      Michigan           1.000 Likely (60-100%)    Yes
+## 4     Villanova           1.000 Likely (60-100%)    Yes
+## 10         Duke           1.000 Likely (60-100%)    Yes
+## 11       Oregon           1.000 Likely (60-100%)    Yes
+## 13    Wisconsin           1.000 Likely (60-100%)    Yes
+## 587  Notre Dame           1.000 Likely (60-100%)    Yes
+## 589    Ohio St.           1.000 Likely (60-100%)    Yes
+## 597  Seton Hall           1.000 Likely (60-100%)    Yes
+## 614     Gonzaga           1.000 Likely (60-100%)    Yes
+## 630      Purdue           1.000 Likely (60-100%)    Yes
+## 704      Butler           1.000 Likely (60-100%)    Yes
+## 705     Arizona           1.000 Likely (60-100%)    Yes
+## 709     Gonzaga           1.000 Likely (60-100%)    Yes
+## 711        UCLA           1.000 Likely (60-100%)    Yes
+## 818     Arizona           1.000 Likely (60-100%)    Yes
+## 819    Kentucky           1.000 Likely (60-100%)    Yes
+## 924       Texas           1.000 Likely (60-100%)    Yes
+## 1040     Baylor           1.000 Likely (60-100%)    Yes
+## 1046 Texas Tech           1.000 Likely (60-100%)    Yes
+## 1169  Tennessee           1.000 Likely (60-100%)    Yes
+## 1172   Illinois           1.000 Likely (60-100%)    Yes
+## 1173     Kansas           1.000 Likely (60-100%)    Yes
+## 1175 Louisville           1.000 Likely (60-100%)    Yes
+## 1177    Clemson           1.000 Likely (60-100%)    Yes
+## 596      Xavier           0.998 Likely (60-100%)    Yes</code></pre>
+<pre class="r"><code># Bubble teams
+results[results$tier == &quot;Bubble (30-60%)&quot;, ]</code></pre>
+<pre><code>##                        TEAM prob_tournament            tier actual
+## 514               Air Force           0.598 Bubble (30-60%)     No
+## 995                 Niagara           0.598 Bubble (30-60%)    Yes
+## 956                 Wyoming           0.596 Bubble (30-60%)    Yes
+## 1069                   Iowa           0.596 Bubble (30-60%)    Yes
+## 1074               Syracuse           0.596 Bubble (30-60%)    Yes
+## 1273                Stetson           0.594 Bubble (30-60%)    Yes
+## 970       Northern Colorado           0.592 Bubble (30-60%)    Yes
+## 307            UT Arlington           0.590 Bubble (30-60%)     No
+## 378  Mississippi Valley St.           0.590 Bubble (30-60%)     No
+## 16                 Richmond           0.588 Bubble (30-60%)     No
+## 841             Wichita St.           0.588 Bubble (30-60%)    Yes
+## 904              St. Thomas           0.588 Bubble (30-60%)    Yes
+## 54                  Houston           0.586 Bubble (30-60%)     No
+## 67             Kennesaw St.           0.586 Bubble (30-60%)     No
+## 846             Florida St.           0.586 Bubble (30-60%)    Yes
+## 919                   Lamar           0.586 Bubble (30-60%)    Yes
+## 211            Delaware St.           0.584 Bubble (30-60%)     No
+## 258          St. Francis PA           0.584 Bubble (30-60%)     No
+## 370  Mississippi Valley St.           0.584 Bubble (30-60%)     No
+## 406               San Diego           0.584 Bubble (30-60%)     No
+## 779       Northern Colorado           0.582 Bubble (30-60%)    Yes
+## 66             Jacksonville           0.580 Bubble (30-60%)     No
+## 85                    Texas           0.580 Bubble (30-60%)     No
+## 1143                Niagara           0.580 Bubble (30-60%)    Yes
+## 83               Texas Tech           0.578 Bubble (30-60%)     No
+## 174                   Brown           0.578 Bubble (30-60%)     No
+## 215  Maryland Eastern Shore           0.578 Bubble (30-60%)     No
+## 400           San Francisco           0.578 Bubble (30-60%)     No
+## 1158                   NJIT           0.578 Bubble (30-60%)    Yes
+## 755        Northern Arizona           0.576 Bubble (30-60%)    Yes
+## 814            Missouri St.           0.576 Bubble (30-60%)    Yes
+## 994                   Rider           0.576 Bubble (30-60%)    Yes
+## 275            Morehead St.           0.574 Bubble (30-60%)     No
+## 364        Western Illinois           0.574 Bubble (30-60%)     No
+## 735       Abilene Christian           0.574 Bubble (30-60%)    Yes
+## 537        North Dakota St.           0.572 Bubble (30-60%)     No
+## 914    UT Rio Grande Valley           0.572 Bubble (30-60%)    Yes
+## 1085               Michigan           0.572 Bubble (30-60%)    Yes
+## 408             Santa Clara           0.570 Bubble (30-60%)     No
+## 866                    Navy           0.568 Bubble (30-60%)    Yes
+## 1109     East Tennessee St.           0.568 Bubble (30-60%)    Yes
+## 1275 Maryland Eastern Shore           0.568 Bubble (30-60%)    Yes
+## 168                 Harvard           0.566 Bubble (30-60%)     No
+## 303        Louisiana Monroe           0.566 Bubble (30-60%)     No
+## 756              New Mexico           0.566 Bubble (30-60%)    Yes
+## 897               Manhattan           0.564 Bubble (30-60%)    Yes
+## 428      Florida Gulf Coast           0.562 Bubble (30-60%)     No
+## 1152      Northern Illinois           0.562 Bubble (30-60%)    Yes
+## 35           Boston College           0.560 Bubble (30-60%)     No
+## 983               Stonehill           0.560 Bubble (30-60%)    Yes
+## 1157            Alabama St.           0.560 Bubble (30-60%)    Yes
+## 33           Boston College           0.558 Bubble (30-60%)     No
+## 284                  Oregon           0.558 Bubble (30-60%)     No
+## 411             Austin Peay           0.554 Bubble (30-60%)     No
+## 638                 Radford           0.554 Bubble (30-60%)    Yes
+## 869            Tarleton St.           0.554 Bubble (30-60%)    Yes
+## 1202         Washington St.           0.554 Bubble (30-60%)    Yes
+## 42               Binghamton           0.552 Bubble (30-60%)     No
+## 230            Colorado St.           0.552 Bubble (30-60%)     No
+## 694              Vanderbilt           0.550 Bubble (30-60%)    Yes
+## 29              Florida St.           0.548 Bubble (30-60%)     No
+## 120                Cal Poly           0.548 Bubble (30-60%)     No
+## 199        Western Michigan           0.548 Bubble (30-60%)     No
+## 171                    Yale           0.546 Bubble (30-60%)     No
+## 21            Massachusetts           0.544 Bubble (30-60%)     No
+## 329                 Florida           0.544 Bubble (30-60%)     No
+## 525          Saint Joseph&#39;s           0.544 Bubble (30-60%)     No
+## 796           James Madison           0.544 Bubble (30-60%)    Yes
+## 1145           Sacred Heart           0.544 Bubble (30-60%)    Yes
+## 627                 Vermont           0.542 Bubble (30-60%)    Yes
+## 749            San Jose St.           0.540 Bubble (30-60%)    Yes
+## 71                 Illinois           0.538 Bubble (30-60%)     No
+## 870                    Troy           0.538 Bubble (30-60%)    Yes
+## 1021               Duquesne           0.538 Bubble (30-60%)    Yes
+## 184                Canisius           0.536 Bubble (30-60%)     No
+## 295              Holy Cross           0.536 Bubble (30-60%)     No
+## 1016                   Rice           0.536 Bubble (30-60%)    Yes
+## 327               Texas A&amp;M           0.534 Bubble (30-60%)     No
+## 642            Northeastern           0.534 Bubble (30-60%)    Yes
+## 34               Pittsburgh           0.532 Bubble (30-60%)     No
+## 60        Northern Kentucky           0.532 Bubble (30-60%)     No
+## 281             Arizona St.           0.532 Bubble (30-60%)     No
+## 488                  Toledo           0.532 Bubble (30-60%)     No
+## 39              Wake Forest           0.530 Bubble (30-60%)     No
+## 943       Northern Kentucky           0.530 Bubble (30-60%)    Yes
+## 976          St. Francis PA           0.530 Bubble (30-60%)    Yes
+## 236            Colorado St.           0.528 Bubble (30-60%)     No
+## 522              St. John&#39;s           0.528 Bubble (30-60%)     No
+## 528               Lafayette           0.528 Bubble (30-60%)     No
+## 1268             Bellarmine           0.528 Bubble (30-60%)    Yes
+## 78                 Penn St.           0.526 Bubble (30-60%)     No
+## 212  Maryland Eastern Shore           0.526 Bubble (30-60%)     No
+## 294                    Army           0.526 Bubble (30-60%)     No
+## 903      North Carolina A&amp;T           0.526 Bubble (30-60%)    Yes
+## 868           Massachusetts           0.524 Bubble (30-60%)    Yes
+## 746                Cal Poly           0.522 Bubble (30-60%)    Yes
+## 1241         East Texas A&amp;M           0.522 Bubble (30-60%)    Yes
+## 987           Saint Peter&#39;s           0.520 Bubble (30-60%)    Yes
+## 1023          San Francisco           0.520 Bubble (30-60%)    Yes
+## 386            Grand Canyon           0.518 Bubble (30-60%)     No
+## 264        Jacksonville St.           0.516 Bubble (30-60%)     No
+## 851       Abilene Christian           0.516 Bubble (30-60%)    Yes
+## 1214                Seattle           0.516 Bubble (30-60%)    Yes
+## 795               Marquette           0.514 Bubble (30-60%)    Yes
+## 959              Coppin St.           0.514 Bubble (30-60%)    Yes
+## 1011              Merrimack           0.514 Bubble (30-60%)    Yes
+## 1228          East Carolina           0.514 Bubble (30-60%)    Yes
+## 540        Eastern Kentucky           0.512 Bubble (30-60%)     No
+## 545                   IUPUI           0.512 Bubble (30-60%)     No
+## 1093                 Toledo           0.512 Bubble (30-60%)    Yes
+## 1246          North Florida           0.512 Bubble (30-60%)    Yes
+## 497           Grambling St.           0.508 Bubble (30-60%)     No
+## 953                  Albany           0.508 Bubble (30-60%)    Yes
+## 1012       Loyola Marymount           0.508 Bubble (30-60%)    Yes
+## 17             George Mason           0.506 Bubble (30-60%)     No
+## 745           Tennessee St.           0.506 Bubble (30-60%)    Yes
+## 898            Presbyterian           0.506 Bubble (30-60%)    Yes
+## 24                 Duquesne           0.504 Bubble (30-60%)     No
+## 114                UC Davis           0.504 Bubble (30-60%)     No
+## 254     Central Connecticut           0.504 Bubble (30-60%)     No
+## 583                    Troy           0.504 Bubble (30-60%)     No
+## 770              Coppin St.           0.504 Bubble (30-60%)    Yes
+## 505                 Stetson           0.502 Bubble (30-60%)     No
+## 1240            Jackson St.           0.502 Bubble (30-60%)    Yes
+## 1103          UNC Asheville           0.500 Bubble (30-60%)    Yes
+## 1208         Nebraska Omaha           0.500 Bubble (30-60%)    Yes
+## 1166         St. Francis PA           0.496 Bubble (30-60%)    Yes
+## 1203          Northern Iowa           0.496 Bubble (30-60%)    Yes
+## 413                  Bryant           0.494 Bubble (30-60%)     No
+## 534           Northern Iowa           0.494 Bubble (30-60%)     No
+## 1261       Coastal Carolina           0.494 Bubble (30-60%)    Yes
+## 106                Longwood           0.492 Bubble (30-60%)     No
+## 158              Wright St.           0.492 Bubble (30-60%)     No
+## 425                  Drexel           0.492 Bubble (30-60%)     No
+## 754                Portland           0.492 Bubble (30-60%)    Yes
+## 758            UC San Diego           0.492 Bubble (30-60%)    Yes
+## 911              Morgan St.           0.492 Bubble (30-60%)    Yes
+## 126                 Hofstra           0.490 Bubble (30-60%)     No
+## 1135                 Queens           0.490 Bubble (30-60%)    Yes
+## 1271         Sacramento St.           0.490 Bubble (30-60%)    Yes
+## 468               Princeton           0.488 Bubble (30-60%)     No
+## 857                 Seattle           0.486 Bubble (30-60%)    Yes
+## 695        Prairie View A&amp;M           0.484 Bubble (30-60%)    Yes
+## 1191            North Texas           0.484 Bubble (30-60%)    Yes
+## 1244                 Denver           0.484 Bubble (30-60%)    Yes
+## 102             Montana St.           0.482 Bubble (30-60%)     No
+## 325                 Wofford           0.482 Bubble (30-60%)     No
+## 732                Winthrop           0.482 Bubble (30-60%)    Yes
+## 1256                 Howard           0.482 Bubble (30-60%)    Yes
+## 803                Stanford           0.480 Bubble (30-60%)    Yes
+## 15                 Richmond           0.478 Bubble (30-60%)     No
+## 1088             High Point           0.478 Bubble (30-60%)    Yes
+## 182                  Marist           0.476 Bubble (30-60%)     No
+## 414                Bucknell           0.476 Bubble (30-60%)     No
+## 662       Abilene Christian           0.476 Bubble (30-60%)    Yes
+## 923                   IUPUI           0.476 Bubble (30-60%)    Yes
+## 100          Sacramento St.           0.474 Bubble (30-60%)     No
+## 132                 Hofstra           0.474 Bubble (30-60%)     No
+## 200        Central Michigan           0.474 Bubble (30-60%)     No
+## 369           Grambling St.           0.474 Bubble (30-60%)     No
+## 535                Kentucky           0.470 Bubble (30-60%)     No
+## 794             The Citadel           0.470 Bubble (30-60%)    Yes
+## 1000          East Carolina           0.470 Bubble (30-60%)    Yes
+## 70                Minnesota           0.468 Bubble (30-60%)     No
+## 148               Charlotte           0.468 Bubble (30-60%)     No
+## 336                 Georgia           0.468 Bubble (30-60%)     No
+## 276        Tennessee Martin           0.466 Bubble (30-60%)     No
+## 741            Delaware St.           0.466 Bubble (30-60%)    Yes
+## 1266       Southern Indiana           0.466 Bubble (30-60%)    Yes
+## 782                    Troy           0.464 Bubble (30-60%)    Yes
+## 865                 Cornell           0.464 Bubble (30-60%)    Yes
+## 1216                  Lamar           0.464 Bubble (30-60%)    Yes
+## 20           Saint Joseph&#39;s           0.462 Bubble (30-60%)     No
+## 115                Cal Poly           0.462 Bubble (30-60%)     No
+## 220                   Drake           0.462 Bubble (30-60%)     No
+## 181                   Siena           0.460 Bubble (30-60%)     No
+## 317             The Citadel           0.460 Bubble (30-60%)     No
+## 766               Dixie St.           0.460 Bubble (30-60%)    Yes
+## 899           Bowling Green           0.460 Bubble (30-60%)    Yes
+## 1017                 Tulane           0.460 Bubble (30-60%)    Yes
+## 90                   DePaul           0.458 Bubble (30-60%)     No
+## 524                 Detroit           0.458 Bubble (30-60%)     No
+## 105                 Liberty           0.456 Bubble (30-60%)     No
+## 744           Robert Morris           0.456 Bubble (30-60%)    Yes
+## 896           North Florida           0.456 Bubble (30-60%)    Yes
+## 1079                Memphis           0.456 Bubble (30-60%)    Yes
+## 123                 Hofstra           0.454 Bubble (30-60%)     No
+## 162                 Detroit           0.454 Bubble (30-60%)     No
+## 415                 Buffalo           0.454 Bubble (30-60%)     No
+## 490                     UAB           0.454 Bubble (30-60%)     No
+## 692                   Tulsa           0.454 Bubble (30-60%)    Yes
+## 807                  Bryant           0.454 Bubble (30-60%)    Yes
+## 915             Alabama A&amp;M           0.454 Bubble (30-60%)    Yes
+## 40                 Hartford           0.450 Bubble (30-60%)     No
+## 208              Coppin St.           0.450 Bubble (30-60%)     No
+## 228              New Mexico           0.450 Bubble (30-60%)     No
+## 288                 Colgate           0.450 Bubble (30-60%)     No
+## 787              Fresno St.           0.450 Bubble (30-60%)    Yes
+## 319                  Mercer           0.448 Bubble (30-60%)     No
+## 875       Northern Colorado           0.448 Bubble (30-60%)    Yes
+## 944                  Howard           0.448 Bubble (30-60%)    Yes
+## 578       Cal St. Fullerton           0.446 Bubble (30-60%)     No
+## 785              Cincinnati           0.446 Bubble (30-60%)    Yes
+## 161           Cleveland St.           0.444 Bubble (30-60%)     No
+## 376             Alabama A&amp;M           0.444 Bubble (30-60%)     No
+## 781             Arizona St.           0.444 Bubble (30-60%)    Yes
+## 1264          Southern Utah           0.444 Bubble (30-60%)    Yes
+## 107            Presbyterian           0.442 Bubble (30-60%)     No
+## 338              Vanderbilt           0.440 Bubble (30-60%)     No
+## 813               Weber St.           0.440 Bubble (30-60%)    Yes
+## 1009              Weber St.           0.440 Bubble (30-60%)    Yes
+## 84             Oklahoma St.           0.438 Bubble (30-60%)     No
+## 379             Alabama A&amp;M           0.438 Bubble (30-60%)     No
+## 311           South Alabama           0.436 Bubble (30-60%)     No
+## 539       Stephen F. Austin           0.436 Bubble (30-60%)     No
+## 541                    Ohio           0.436 Bubble (30-60%)     No
+## 829             Montana St.           0.436 Bubble (30-60%)    Yes
+## 198                  Toledo           0.434 Bubble (30-60%)     No
+## 290                American           0.434 Bubble (30-60%)     No
+## 58                    Tulsa           0.432 Bubble (30-60%)     No
+## 1137       Middle Tennessee           0.430 Bubble (30-60%)    Yes
+## 192           Bowling Green           0.428 Bubble (30-60%)     No
+## 604             Georgia St.           0.428 Bubble (30-60%)    Yes
+## 986                    UTEP           0.426 Bubble (30-60%)    Yes
+## 600                Marshall           0.424 Bubble (30-60%)    Yes
+## 663        South Dakota St.           0.424 Bubble (30-60%)    Yes
+## 1207             California           0.422 Bubble (30-60%)    Yes
+## 389             Chicago St.           0.420 Bubble (30-60%)     No
+## 421                 Cornell           0.420 Bubble (30-60%)     No
+## 544                    Rice           0.420 Bubble (30-60%)     No
+## 884            UT Arlington           0.420 Bubble (30-60%)    Yes
+## 1250         Texas Southern           0.420 Bubble (30-60%)    Yes
+## 75                 Illinois           0.418 Bubble (30-60%)     No
+## 214            Delaware St.           0.418 Bubble (30-60%)     No
+## 405                 Pacific           0.418 Bubble (30-60%)     No
+## 654               Lafayette           0.416 Bubble (30-60%)    Yes
+## 774             McNeese St.           0.416 Bubble (30-60%)    Yes
+## 1251     Eastern Washington           0.416 Bubble (30-60%)    Yes
+## 1262                   UMBC           0.416 Bubble (30-60%)    Yes
+## 354        Western Illinois           0.414 Bubble (30-60%)     No
+## 469              Quinnipiac           0.414 Bubble (30-60%)     No
+## 76             Northwestern           0.412 Bubble (30-60%)     No
+## 430              Fresno St.           0.412 Bubble (30-60%)     No
+## 566                American           0.412 Bubble (30-60%)     No
+## 646                 Buffalo           0.412 Bubble (30-60%)    Yes
+## 658             Georgia St.           0.412 Bubble (30-60%)    Yes
+## 772              California           0.412 Bubble (30-60%)    Yes
+## 139                     FIU           0.410 Bubble (30-60%)     No
+## 368              Alcorn St.           0.410 Bubble (30-60%)     No
+## 1005         Long Beach St.           0.410 Bubble (30-60%)    Yes
+## 365                  Denver           0.408 Bubble (30-60%)     No
+## 527                     FIU           0.406 Bubble (30-60%)     No
+## 1112             Louisville           0.406 Bubble (30-60%)    Yes
+## 128          William &amp; Mary           0.404 Bubble (30-60%)     No
+## 863                Winthrop           0.400 Bubble (30-60%)    Yes
+## 26            Massachusetts           0.398 Bubble (30-60%)     No
+## 191                    Ohio           0.398 Bubble (30-60%)     No
+## 394    UT Rio Grande Valley           0.398 Bubble (30-60%)     No
+## 580           South Florida           0.398 Bubble (30-60%)     No
+## 1036         UNC Wilmington           0.398 Bubble (30-60%)    Yes
+## 1130              San Diego           0.398 Bubble (30-60%)    Yes
+## 1153 Southeastern Louisiana           0.398 Bubble (30-60%)    Yes
+## 1218          Cleveland St.           0.398 Bubble (30-60%)    Yes
+## 1224         Boston College           0.398 Bubble (30-60%)    Yes
+## 1235           South Dakota           0.396 Bubble (30-60%)    Yes
+## 359              Fort Wayne           0.394 Bubble (30-60%)     No
+## 436              High Point           0.394 Bubble (30-60%)     No
+## 1234          UNC Asheville           0.394 Bubble (30-60%)    Yes
+## 802              Seton Hall           0.392 Bubble (30-60%)    Yes
+## 221            Missouri St.           0.390 Bubble (30-60%)     No
+## 392     Cal St. Bakersfield           0.390 Bubble (30-60%)     No
+## 555              Coppin St.           0.390 Bubble (30-60%)     No
+## 550                Longwood           0.388 Bubble (30-60%)     No
+## 37               Pittsburgh           0.386 Bubble (30-60%)     No
+## 210      North Carolina A&amp;T           0.386 Bubble (30-60%)     No
+## 385             Chicago St.           0.386 Bubble (30-60%)     No
+## 811        South Dakota St.           0.384 Bubble (30-60%)    Yes
+## 1039                 Toledo           0.384 Bubble (30-60%)    Yes
+## 203        Western Michigan           0.382 Bubble (30-60%)     No
+## 512                Nebraska           0.382 Bubble (30-60%)     No
+## 1136 North Carolina Central           0.382 Bubble (30-60%)    Yes
+## 260        Eastern Kentucky           0.380 Bubble (30-60%)     No
+## 1141           Presbyterian           0.380 Bubble (30-60%)    Yes
+## 1075                    LSU           0.378 Bubble (30-60%)    Yes
+## 1124                  Lamar           0.378 Bubble (30-60%)    Yes
+## 51            South Florida           0.376 Bubble (30-60%)     No
+## 266             Austin Peay           0.376 Bubble (30-60%)     No
+## 452                Miami OH           0.376 Bubble (30-60%)     No
+## 99        Northern Colorado           0.374 Bubble (30-60%)     No
+## 166                Columbia           0.374 Bubble (30-60%)     No
+## 305                    Troy           0.374 Bubble (30-60%)     No
+## 286              California           0.372 Bubble (30-60%)     No
+## 377     Arkansas Pine Bluff           0.372 Bubble (30-60%)     No
+## 532              Providence           0.372 Bubble (30-60%)     No
+## 92               Providence           0.370 Bubble (30-60%)     No
+## 282              California           0.370 Bubble (30-60%)     No
+## 347         Sam Houston St.           0.368 Bubble (30-60%)     No
+## 1248      Stephen F. Austin           0.368 Bubble (30-60%)    Yes
+## 1255              Weber St.           0.368 Bubble (30-60%)    Yes
+## 1126     Cal St. Northridge           0.366 Bubble (30-60%)    Yes
+## 399               San Diego           0.364 Bubble (30-60%)     No
+## 743             Alabama St.           0.364 Bubble (30-60%)    Yes
+## 204             Florida A&amp;M           0.362 Bubble (30-60%)     No
+## 323        Western Carolina           0.362 Bubble (30-60%)     No
+## 688                 Montana           0.362 Bubble (30-60%)    Yes
+## 563      East Tennessee St.           0.360 Bubble (30-60%)     No
+## 417                Canisius           0.358 Bubble (30-60%)     No
+## 499                    Utah           0.358 Bubble (30-60%)     No
+## 883      Eastern Washington           0.358 Bubble (30-60%)    Yes
+## 309            Arkansas St.           0.356 Bubble (30-60%)     No
+## 375        Prairie View A&amp;M           0.356 Bubble (30-60%)     No
+## 433             Georgia St.           0.356 Bubble (30-60%)     No
+## 764           East Carolina           0.356 Bubble (30-60%)    Yes
+## 1091                 Towson           0.356 Bubble (30-60%)    Yes
+## 233                Utah St.           0.354 Bubble (30-60%)     No
+## 780                    UMKC           0.354 Bubble (30-60%)    Yes
+## 957            Rhode Island           0.354 Bubble (30-60%)    Yes
+## 133           James Madison           0.352 Bubble (30-60%)     No
+## 974       Abilene Christian           0.352 Bubble (30-60%)    Yes
+## 643              Valparaiso           0.350 Bubble (30-60%)    Yes
+## 74                  Rutgers           0.348 Bubble (30-60%)     No
+## 138           Southern Miss           0.348 Bubble (30-60%)     No
+## 196                   Akron           0.348 Bubble (30-60%)     No
+## 362        Western Illinois           0.348 Bubble (30-60%)     No
+## 404               San Diego           0.348 Bubble (30-60%)     No
+## 458           New Hampshire           0.348 Bubble (30-60%)     No
+## 980          St. Francis NY           0.348 Bubble (30-60%)    Yes
+## 1072               Maryland           0.348 Bubble (30-60%)    Yes
+## 64       Florida Gulf Coast           0.346 Bubble (30-60%)     No
+## 498         Appalachian St.           0.346 Bubble (30-60%)     No
+## 1270      Northern Illinois           0.346 Bubble (30-60%)    Yes
+## 639            Northeastern           0.342 Bubble (30-60%)    Yes
+## 1197            Florida St.           0.342 Bubble (30-60%)    Yes
+## 49                      UCF           0.340 Bubble (30-60%)     No
+## 363              Fort Wayne           0.340 Bubble (30-60%)     No
+## 439                   Idaho           0.340 Bubble (30-60%)     No
+## 554                    Navy           0.340 Bubble (30-60%)     No
+## 1061       Western Kentucky           0.340 Bubble (30-60%)    Yes
+## 1063               Longwood           0.340 Bubble (30-60%)    Yes
+## 44              Stony Brook           0.338 Bubble (30-60%)     No
+## 81               Kansas St.           0.338 Bubble (30-60%)     No
+## 344         Sam Houston St.           0.338 Bubble (30-60%)     No
+## 523               Green Bay           0.338 Bubble (30-60%)     No
+## 665          New Mexico St.           0.338 Bubble (30-60%)    Yes
+## 792               Idaho St.           0.338 Bubble (30-60%)    Yes
+## 240                    UNLV           0.336 Bubble (30-60%)     No
+## 296               Loyola MD           0.336 Bubble (30-60%)     No
+## 297                American           0.336 Bubble (30-60%)     No
+## 848                  Temple           0.336 Bubble (30-60%)    Yes
+## 109           UNC Asheville           0.334 Bubble (30-60%)     No
+## 178                   Rider           0.334 Bubble (30-60%)     No
+## 219                 Bradley           0.334 Bubble (30-60%)     No
+## 553                    UMBC           0.334 Bubble (30-60%)     No
+## 151                    UTEP           0.332 Bubble (30-60%)     No
+## 163                   IUPUI           0.332 Bubble (30-60%)     No
+## 1007             Alcorn St.           0.332 Bubble (30-60%)    Yes
+## 1238           UT Arlington           0.332 Bubble (30-60%)    Yes
+## 73                 Penn St.           0.330 Bubble (30-60%)     No
+## 229                Utah St.           0.330 Bubble (30-60%)     No
+## 304               Texas St.           0.330 Bubble (30-60%)     No
+## 318                  Furman           0.330 Bubble (30-60%)     No
+## 964       Houston Christian           0.330 Bubble (30-60%)    Yes
+## 57              Connecticut           0.328 Bubble (30-60%)     No
+## 355                    IPFW           0.328 Bubble (30-60%)     No
+## 372             Alabama A&amp;M           0.328 Bubble (30-60%)     No
+## 380           Grambling St.           0.328 Bubble (30-60%)     No
+## 349          Incarnate Word           0.326 Bubble (30-60%)     No
+## 426                Duquesne           0.326 Bubble (30-60%)     No
+## 140                Marshall           0.324 Bubble (30-60%)     No
+## 494          William &amp; Mary           0.324 Bubble (30-60%)     No
+## 573       Northern Colorado           0.324 Bubble (30-60%)     No
+## 301        Georgia Southern           0.322 Bubble (30-60%)     No
+## 367             Alabama St.           0.322 Bubble (30-60%)     No
+## 30       North Carolina St.           0.320 Bubble (30-60%)     No
+## 894            Portland St.           0.320 Bubble (30-60%)    Yes
+## 19            Massachusetts           0.318 Bubble (30-60%)     No
+## 116                  Hawaii           0.318 Bubble (30-60%)     No
+## 241                 Wyoming           0.318 Bubble (30-60%)     No
+## 41             UMass Lowell           0.316 Bubble (30-60%)     No
+## 419             Chattanooga           0.316 Bubble (30-60%)     No
+## 676                American           0.316 Bubble (30-60%)    Yes
+## 988               Utah Tech           0.316 Bubble (30-60%)    Yes
+## 348  Southeastern Louisiana           0.314 Bubble (30-60%)     No
+## 1147     South Carolina St.           0.314 Bubble (30-60%)    Yes
+## 96              Montana St.           0.312 Bubble (30-60%)     No
+## 328              Vanderbilt           0.312 Bubble (30-60%)     No
+## 387             Utah Valley           0.312 Bubble (30-60%)     No
+## 449                     LSU           0.312 Bubble (30-60%)     No
+## 1013      Stephen F. Austin           0.312 Bubble (30-60%)    Yes
+## 298     Louisiana Lafayette           0.310 Bubble (30-60%)     No
+## 1221               Winthrop           0.310 Bubble (30-60%)    Yes
+## 160               Green Bay           0.306 Bubble (30-60%)     No
+## 239           San Diego St.           0.306 Bubble (30-60%)     No
+## 306             Georgia St.           0.306 Bubble (30-60%)     No
+## 503          Washington St.           0.304 Bubble (30-60%)     No
+## 206      South Carolina St.           0.302 Bubble (30-60%)     No</code></pre>
 </div>
 <div id="tier-accuracy-how-well-do-the-tiers-match-actual-outcomes" class="section level1">
 <h1>Tier accuracy — how well do the tiers match actual outcomes?</h1>
@@ -795,17 +916,64 @@ tier_matrix &lt;- table(Tier = results$tier, Actual = results$actual)
 tier_matrix</code></pre>
 <pre><code>##                   Actual
 ## Tier                No Yes
-##   Unlikely (0-30%) 690 326
-##   Bubble (30-70%)   30  35
-##   Likely (70-100%) 255 789</code></pre>
+##   Unlikely (0-30%) 263  64
+##   Bubble (30-60%)  226 170
+##   Likely (60-100%)  81 471</code></pre>
 <pre class="r"><code># Proportion of teams in each tier that actually made the tournament
 tier_accuracy &lt;- prop.table(tier_matrix, margin = 1)
 round(tier_accuracy, 3)</code></pre>
 <pre><code>##                   Actual
 ## Tier                  No   Yes
-##   Unlikely (0-30%) 0.679 0.321
-##   Bubble (30-70%)  0.462 0.538
-##   Likely (70-100%) 0.244 0.756</code></pre>
+##   Unlikely (0-30%) 0.804 0.196
+##   Bubble (30-60%)  0.571 0.429
+##   Likely (60-100%) 0.147 0.853</code></pre>
+<pre class="r"><code># Same thing as a clean summary table
+tier_summary &lt;- data.frame(
+  tier = rownames(tier_matrix),
+  n_teams = rowSums(tier_matrix),
+  made_tournament = tier_matrix[, &quot;Yes&quot;],
+  missed_tournament = tier_matrix[, &quot;No&quot;],
+  actual_rate = round(tier_matrix[, &quot;Yes&quot;] / rowSums(tier_matrix), 3)
+)
+tier_summary</code></pre>
+<pre><code>##                              tier n_teams made_tournament missed_tournament
+## Unlikely (0-30%) Unlikely (0-30%)     327              64               263
+## Bubble (30-60%)   Bubble (30-60%)     396             170               226
+## Likely (60-100%) Likely (60-100%)     552             471                81
+##                  actual_rate
+## Unlikely (0-30%)       0.196
+## Bubble (30-60%)        0.429
+## Likely (60-100%)       0.853</code></pre>
+<pre class="r"><code># Overall hard-classification accuracy (using default 0.5 threshold)
+rf_preds &lt;- predict(rf_model, test_x)
+confusionMatrix(rf_preds, test$POSTSEASON, positive = &quot;Yes&quot;)</code></pre>
+<pre><code>## Confusion Matrix and Statistics
+## 
+##           Reference
+## Prediction  No Yes
+##        No  427 171
+##        Yes 143 534
+##                                           
+##                Accuracy : 0.7537          
+##                  95% CI : (0.7291, 0.7772)
+##     No Information Rate : 0.5529          
+##     P-Value [Acc &gt; NIR] : &lt;2e-16          
+##                                           
+##                   Kappa : 0.5042          
+##                                           
+##  Mcnemar&#39;s Test P-Value : 0.1276          
+##                                           
+##             Sensitivity : 0.7574          
+##             Specificity : 0.7491          
+##          Pos Pred Value : 0.7888          
+##          Neg Pred Value : 0.7140          
+##              Prevalence : 0.5529          
+##          Detection Rate : 0.4188          
+##    Detection Prevalence : 0.5310          
+##       Balanced Accuracy : 0.7533          
+##                                           
+##        &#39;Positive&#39; Class : Yes             
+## </code></pre>
 </div>
 
 

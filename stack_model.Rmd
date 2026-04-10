@@ -10,9 +10,20 @@ knitr::opts_chunk$set(echo = TRUE)
 library(dplyr)
 ```
 
-# Get cleaned data and test + train
+# Get cleaned data
 ```{r}
 march_data <- read.csv("clean_march_data.csv")
+# Drop row index column if present
+march_data <- march_data %>% select(-any_of(c("X")))
+
+cbb_raw <- read.csv("cbb.csv")
+teams_all <- cbb_raw$TEAM
+years_all <- cbb_raw$YEAR
+
+march_data <- march_data %>% select(-TEAM)
+
+# Convert CONF to dummy variables
+march_data <- as.data.frame(model.matrix(~ . - 1, data = march_data))
 ```
 
 # Split into test/train and pred/outcome
@@ -20,9 +31,12 @@ march_data <- read.csv("clean_march_data.csv")
 ratio <- 0.5
 set.seed(12345)
 
-train_rows <- sample(1:nrow(march_data), ratio*nrow(march_data))
+train_rows <- sample(1:nrow(march_data), ratio * nrow(march_data))
 train <- march_data[train_rows, ]
 test <- march_data[-train_rows, ]
+
+test_teams <- teams_all[-train_rows]
+test_years <- years_all[-train_rows]
 
 pred_train <- train %>% select(-POSTSEASON)
 outcome_train <- train$POSTSEASON
@@ -35,25 +49,26 @@ outcome_test <- test$POSTSEASON
 ```{r}
 library(caret)
 
-pred_train_scaled <- as.data.frame(scale(pred_train))
-pred_test_scaled <- as.data.frame(scale(pred_test))
+# Remove near-zero-variance columns before scaling (prevents NaN from rare dummies)
+nzv <- nearZeroVar(pred_train, saveMetrics = FALSE)
+if (length(nzv) > 0) {
+  pred_train <- pred_train[, -nzv]
+  pred_test <- pred_test[, -nzv]
+}
+
+# Scale training data and save the parameters
+train_scale <- scale(pred_train)
+train_center <- attr(train_scale, "scaled:center")
+train_sd <- attr(train_scale, "scaled:scale")
+
+pred_train_scaled <- as.data.frame(train_scale)
+# Scale test data using training mean/sd
+pred_test_scaled <- as.data.frame(scale(pred_test, center = train_center, scale = train_sd))
 
 outcome_train_fac <- factor(outcome_train, levels = c(0, 1), labels = c("No", "Yes"))
 outcome_test_fac <- factor(outcome_test, levels = c(0, 1), labels = c("No", "Yes"))
 
 ctrl <- trainControl(method = "cv", number = 5, savePredictions = "final", classProbs = TRUE)
-```
-
-
-# Logistic Regression -> new file here
-```{r}
-logistic_model <- train(
-  x = pred_train_scaled,
-  y = outcome_train_fac,
-  method = "glm",
-  family = "binomial",
-  trControl = ctrl
-)
 ```
 
 # KNN
@@ -65,6 +80,7 @@ knn_model <- train(
   trControl = ctrl,
   tuneLength = 5
 )
+varImp(knn_model)
 ```
 
 # ANN
@@ -80,6 +96,7 @@ ann_model <- train(
   trace = FALSE,
   maxit = 200
 )
+varImp(ann_model)
 ```
 
 # SVM
@@ -93,9 +110,103 @@ svm_model <- train(
   trControl = ctrl,
   tuneLength = 3
 )
+varImp(svm_model)
+```
+# Random Forest
+```{r}
+library(randomForest)
+
+rf_model <- train(
+  x = pred_train_scaled,
+  y = outcome_train_fac,
+  method = "rf",
+  trControl = ctrl,
+  tuneLength = 3
+)
+varImp(rf_model)
 ```
 
-# Starting second level random forest ->start next file here
+# Build meta-features
 ```{r}
+# Get first-level predictions on training data
+knn_train_preds <- predict(knn_model, pred_train_scaled, type = "prob")$Yes
+ann_train_preds <- predict(ann_model, pred_train_scaled, type = "prob")$Yes
+svm_train_preds <- predict(svm_model, pred_train_scaled, type = "prob")$Yes
+rf_train_preds <- predict(rf_model, pred_train_scaled, type = "prob")$Yes
 
+meta_train <- data.frame(
+  knn = knn_train_preds,
+  ann = ann_train_preds,
+  svm = svm_train_preds,
+  rf = rf_train_preds,
+  outcome = outcome_train_fac
+)
+
+# Get first-level predictions on test data
+knn_test_preds <- predict(knn_model, pred_test_scaled, type = "prob")$Yes
+ann_test_preds <- predict(ann_model, pred_test_scaled, type = "prob")$Yes
+svm_test_preds <- predict(svm_model, pred_test_scaled, type = "prob")$Yes
+rf_test_preds <- predict(rf_model, pred_test_scaled, type = "prob")$Yes
+
+meta_test <- data.frame(
+  knn = knn_test_preds,
+  ann = ann_test_preds,
+  svm = svm_test_preds,
+  rf = rf_test_preds
+)
+```
+
+# Second-level stacked logistic regression
+Using logistic regression as the meta-learner instead of C5.0 — C5.0 only outputs a small number of distinct leaf-node probabilities, which causes every team to clump at the same few values and leaves the Bubble tier empty. Logistic regression outputs smooth probabilities across the full 0-1 range, which is what we want for likelihood tiers.
+```{r}
+stack_model <- train(
+  x = meta_train %>% select(-outcome),
+  y = meta_train$outcome,
+  method = "glm",
+  family = "binomial",
+  trControl = trainControl(method = "cv", number = 5, classProbs = TRUE)
+)
+
+stack_probs <- predict(stack_model, meta_test, type = "prob")$Yes
+```
+
+# Tournament likelihood per team
+```{r}
+# Bucket into tiers: Unlikely (0-30%), Bubble (30-70%), Likely (70-100%)
+tier <- cut(
+  stack_probs,
+  breaks = c(-Inf, 0.30, 0.70, Inf),
+  labels = c("Unlikely (0-30%)", "Bubble (30-70%)", "Likely (70-100%)"),
+  right = FALSE
+)
+
+results <- data.frame(
+  TEAM = test_teams,
+  YEAR = test_years,
+  knn      = round(meta_test$knn, 3),
+  ann      = round(meta_test$ann, 3),
+  svm      = round(meta_test$svm, 3),
+  rf       = round(meta_test$rf, 3),
+  stacked  = round(stack_probs, 3),
+  tier     = tier,
+  actual   = outcome_test_fac
+)
+
+# Sort by stacked probability, highest first
+results <- results[order(-results$stacked), ]
+
+table(results$tier)
+
+results[results$tier == "Bubble (30-70%)", ]
+```
+
+# Tier accuracy — how well do the tiers match actual outcomes?
+```{r}
+# Cross-tab of predicted tier vs actual outcome
+tier_matrix <- table(Tier = results$tier, Actual = results$actual)
+tier_matrix
+
+# Proportion of teams in each tier that actually made the tournament
+tier_accuracy <- prop.table(tier_matrix, margin = 1)
+round(tier_accuracy, 3)
 ```
